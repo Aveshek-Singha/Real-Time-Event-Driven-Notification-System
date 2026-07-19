@@ -1,0 +1,19 @@
+{
+  "name": "@notification-system/service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "lint": "node ../../scripts/lint.mjs src package.json tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --conditions=development --import tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@notification-system/contracts": "workspace:*",
+    "fastify": "^5.0.0"
+  }
+}

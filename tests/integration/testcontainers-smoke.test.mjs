@@ -1,0 +1,47 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { KafkaContainer } from "@testcontainers/kafka";
+import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { Kafka, logLevel } from "kafkajs";
+import pg from "pg";
+
+const { Client } = pg;
+
+describe("T1 Testcontainers smoke harness", () => {
+  it("starts Kafka and Postgres and connects to both", { timeout: 420_000 }, async () => {
+    const kafkaContainer = await new KafkaContainer("confluentinc/cp-kafka:7.4.0")
+      .withKraft()
+      .withStartupTimeout(300_000)
+      .start();
+    const postgresContainer = await new PostgreSqlContainer("postgres:16-alpine").start();
+
+    try {
+      const postgres = new Client({
+        host: postgresContainer.getHost(),
+        port: postgresContainer.getPort(),
+        database: postgresContainer.getDatabase(),
+        user: postgresContainer.getUsername(),
+        password: postgresContainer.getPassword(),
+      });
+      await postgres.connect();
+      const postgresResult = await postgres.query("SELECT 1 AS live");
+      await postgres.end();
+
+      assert.deepEqual(postgresResult.rows, [{ live: 1 }]);
+
+      const kafka = new Kafka({
+        brokers: [`${kafkaContainer.getHost()}:${kafkaContainer.getMappedPort(9093)}`],
+        clientId: "t1-smoke",
+        logLevel: logLevel.ERROR,
+      });
+      const admin = kafka.admin();
+      await admin.connect();
+      const topics = await admin.listTopics();
+      await admin.disconnect();
+
+      assert.ok(Array.isArray(topics));
+    } finally {
+      await Promise.allSettled([kafkaContainer.stop(), postgresContainer.stop()]);
+    }
+  });
+});
