@@ -23,14 +23,35 @@ type Pipeline = {
   close(): Promise<void>;
 };
 
+type InboxPageOptions = {
+  limit: number;
+  offset: number;
+  unreadOnly: boolean;
+};
+
+type InboxPage = {
+  notifications: Notification[];
+  nextOffset: number | null;
+};
+
+type InboxStore = {
+  migrate(): Promise<void>;
+  persist(notification: Notification): Promise<boolean>;
+  list(recipientId: string, options: InboxPageOptions): Promise<InboxPage>;
+  unreadCount(recipientId: string): Promise<number>;
+  markRead(recipientId: string, notificationId: string): Promise<Notification | undefined>;
+  markAllRead(recipientId: string): Promise<number>;
+  close(): Promise<void>;
+};
+
 type ServiceOptions = {
   pipeline?: Pipeline;
+  inboxStore?: InboxStore;
 };
 
 type KafkaPipelineOptions = {
   brokers: string[];
   groupId: string;
-  postgresUrl: string;
   topic: string;
 };
 
@@ -101,11 +122,11 @@ class KafkaNotificationPipeline implements Pipeline {
   readonly #consumer: Consumer;
   readonly #kafka: Kafka;
   readonly #liveConnections: LiveConnections;
-  readonly #pool: pg.Pool;
   readonly #producer: Producer;
+  readonly #store: InboxStore;
   readonly #topic: string;
 
-  constructor(options: KafkaPipelineOptions, liveConnections: LiveConnections) {
+  constructor(options: KafkaPipelineOptions, liveConnections: LiveConnections, store: InboxStore) {
     this.#kafka = new Kafka({
       brokers: options.brokers,
       clientId: "notification-service",
@@ -114,13 +135,13 @@ class KafkaNotificationPipeline implements Pipeline {
 
     this.#consumer = this.#kafka.consumer({ groupId: options.groupId });
     this.#liveConnections = liveConnections;
-    this.#pool = new Pool({ connectionString: options.postgresUrl });
     this.#producer = this.#kafka.producer();
+    this.#store = store;
     this.#topic = options.topic;
   }
 
   async start() {
-    await this.#migrate();
+    await this.#store.migrate();
     await this.#ensureTopic();
     await this.#producer.connect();
     await this.#consumer.connect();
@@ -144,7 +165,7 @@ class KafkaNotificationPipeline implements Pipeline {
 
           const parsedMessage = kafkaNotificationMessageSchema.parse(JSON.parse(message.value.toString()));
           const notification = notificationFromMessage(parsedMessage);
-          const inserted = await this.#persist(notification);
+          const inserted = await this.#store.persist(notification);
 
           if (inserted) {
             this.#liveConnections.push(notification);
@@ -180,7 +201,6 @@ class KafkaNotificationPipeline implements Pipeline {
     await Promise.allSettled([
       this.#consumer.disconnect(),
       this.#producer.disconnect(),
-      this.#pool.end(),
     ]);
   }
 
@@ -202,7 +222,16 @@ class KafkaNotificationPipeline implements Pipeline {
     }
   }
 
-  async #migrate() {
+}
+
+class PgInboxStore implements InboxStore {
+  readonly #pool: pg.Pool;
+
+  constructor(postgresUrl: string) {
+    this.#pool = new Pool({ connectionString: postgresUrl });
+  }
+
+  async migrate() {
     await this.#pool.query(`
       CREATE TABLE IF NOT EXISTS notifications (
         id text PRIMARY KEY,
@@ -217,9 +246,18 @@ class KafkaNotificationPipeline implements Pipeline {
         UNIQUE (event_id, recipient_id)
       )
     `);
+    await this.#pool.query(`
+      CREATE INDEX IF NOT EXISTS notifications_recipient_created_idx
+      ON notifications (recipient_id, created_at DESC, id DESC)
+    `);
+    await this.#pool.query(`
+      CREATE INDEX IF NOT EXISTS notifications_recipient_unread_idx
+      ON notifications (recipient_id)
+      WHERE read = false
+    `);
   }
 
-  async #persist(notification: Notification) {
+  async persist(notification: Notification) {
     const result = await this.#pool.query(
       `
         INSERT INTO notifications (
@@ -251,9 +289,107 @@ class KafkaNotificationPipeline implements Pipeline {
 
     return result.rowCount === 1;
   }
+
+  async list(recipientId: string, options: InboxPageOptions) {
+    const rowsToFetch = options.limit + 1;
+    const unreadPredicate = options.unreadOnly ? "AND read = false" : "";
+    const result = await this.#pool.query(
+      `
+        SELECT id, event_id, recipient_id, type, title, body, payload, read, created_at
+        FROM notifications
+        WHERE recipient_id = $1
+        ${unreadPredicate}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2 OFFSET $3
+      `,
+      [recipientId, rowsToFetch, options.offset],
+    );
+    const notifications = result.rows.slice(0, options.limit).map(notificationFromRow);
+
+    return {
+      notifications,
+      nextOffset: result.rows.length > options.limit ? options.offset + options.limit : null,
+    };
+  }
+
+  async unreadCount(recipientId: string) {
+    const result = await this.#pool.query(
+      "SELECT count(*)::int AS count FROM notifications WHERE recipient_id = $1 AND read = false",
+      [recipientId],
+    );
+
+    return result.rows[0].count;
+  }
+
+  async markRead(recipientId: string, notificationId: string) {
+    const result = await this.#pool.query(
+      `
+        UPDATE notifications
+        SET read = true
+        WHERE recipient_id = $1 AND id = $2
+        RETURNING id, event_id, recipient_id, type, title, body, payload, read, created_at
+      `,
+      [recipientId, notificationId],
+    );
+
+    return result.rows[0] ? notificationFromRow(result.rows[0]) : undefined;
+  }
+
+  async markAllRead(recipientId: string) {
+    const result = await this.#pool.query(
+      "UPDATE notifications SET read = true WHERE recipient_id = $1 AND read = false",
+      [recipientId],
+    );
+
+    return result.rowCount ?? 0;
+  }
+
+  async close() {
+    await this.#pool.end();
+  }
 }
 
-function pipelineFromEnvironment(liveConnections: LiveConnections) {
+function notificationFromRow(row: {
+  id: string;
+  event_id: string;
+  recipient_id: string;
+  type: string;
+  title: string;
+  body: string;
+  payload: unknown;
+  read: boolean;
+  created_at: Date | string;
+}): Notification {
+  const createdAt = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
+
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    recipientId: row.recipient_id,
+    type: row.type,
+    title: row.title,
+    body: row.body,
+    payload: row.payload,
+    read: row.read,
+    createdAt,
+  };
+}
+
+function parseIntegerQuery(value: unknown, fallback: number, options: { min: number; max: number }) {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed < options.min || parsed > options.max) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
+function environmentDependencies(liveConnections: LiveConnections) {
   const brokers = process.env.KAFKA_BROKERS?.split(",").map((broker) => broker.trim()).filter(Boolean);
   const postgresUrl = process.env.POSTGRES_URL;
 
@@ -261,18 +397,22 @@ function pipelineFromEnvironment(liveConnections: LiveConnections) {
     return undefined;
   }
 
-  return new KafkaNotificationPipeline({
+  const inboxStore = new PgInboxStore(postgresUrl);
+  const pipeline = new KafkaNotificationPipeline({
     brokers,
     groupId: process.env.KAFKA_GROUP_ID ?? `notification-service-${randomUUID()}`,
-    postgresUrl,
     topic: process.env.KAFKA_TOPIC ?? "notifications",
-  }, liveConnections);
+  }, liveConnections, inboxStore);
+
+  return { inboxStore, pipeline };
 }
 
 export function buildService(options: ServiceOptions = {}) {
   const app = Fastify({ logger: true, pluginTimeout: 120_000 });
   const liveConnections = new LiveConnections();
-  const pipeline = options.pipeline ?? pipelineFromEnvironment(liveConnections);
+  const environment = options.pipeline || options.inboxStore ? undefined : environmentDependencies(liveConnections);
+  const pipeline = options.pipeline ?? environment?.pipeline;
+  const inboxStore = options.inboxStore ?? environment?.inboxStore;
 
   app.register(websocket);
   app.after(() => {
@@ -324,14 +464,101 @@ export function buildService(options: ServiceOptions = {}) {
     });
   });
 
+  app.get("/recipients/:recipientId/inbox", async (request, reply) => {
+    if (!inboxStore) {
+      return reply.code(503).send({
+        error: "inbox_unavailable",
+      });
+    }
+
+    const query = request.query as { limit?: string; offset?: string; unreadOnly?: string };
+    const limit = parseIntegerQuery(query.limit, 20, { min: 1, max: 100 });
+    const offset = parseIntegerQuery(query.offset, 0, { min: 0, max: 1_000_000 });
+    const unreadOnly = query.unreadOnly === "true";
+
+    if (limit === undefined || offset === undefined) {
+      return reply.code(400).send({
+        error: "invalid_inbox_query",
+      });
+    }
+
+    const params = request.params as { recipientId: string };
+    const page = await inboxStore.list(params.recipientId, { limit, offset, unreadOnly });
+
+    return {
+      notifications: page.notifications,
+      page: {
+        limit,
+        offset,
+        nextOffset: page.nextOffset,
+      },
+    };
+  });
+
+  app.get("/recipients/:recipientId/inbox/unread-count", async (request, reply) => {
+    if (!inboxStore) {
+      return reply.code(503).send({
+        error: "inbox_unavailable",
+      });
+    }
+
+    const params = request.params as { recipientId: string };
+
+    return {
+      recipientId: params.recipientId,
+      unread: await inboxStore.unreadCount(params.recipientId),
+    };
+  });
+
+  app.post("/recipients/:recipientId/inbox/:notificationId/read", async (request, reply) => {
+    if (!inboxStore) {
+      return reply.code(503).send({
+        error: "inbox_unavailable",
+      });
+    }
+
+    const params = request.params as { recipientId: string; notificationId: string };
+    const notification = await inboxStore.markRead(params.recipientId, params.notificationId);
+
+    if (!notification) {
+      return reply.code(404).send({
+        error: "notification_not_found",
+      });
+    }
+
+    return { notification };
+  });
+
+  app.post("/recipients/:recipientId/inbox/read-all", async (request, reply) => {
+    if (!inboxStore) {
+      return reply.code(503).send({
+        error: "inbox_unavailable",
+      });
+    }
+
+    const params = request.params as { recipientId: string };
+
+    return {
+      recipientId: params.recipientId,
+      markedRead: await inboxStore.markAllRead(params.recipientId),
+    };
+  });
+
   app.addHook("onReady", async () => {
+    if (inboxStore && !(pipeline instanceof KafkaNotificationPipeline)) {
+      await inboxStore.migrate();
+    }
+
     if (pipeline instanceof KafkaNotificationPipeline) {
       await pipeline.start();
     }
   });
 
   app.addHook("onClose", async () => {
-    await pipeline?.close();
+    await Promise.allSettled([
+      pipeline?.close(),
+      inboxStore?.close(),
+    ]);
   });
 
   return app;
