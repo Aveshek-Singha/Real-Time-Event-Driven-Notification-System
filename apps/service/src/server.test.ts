@@ -50,6 +50,29 @@ describe("service hello world", () => {
   });
 });
 
+describe("T4 SSE transport", () => {
+  it("opens an SSE Connection at the HTTP edge", async () => {
+    const sseService = buildService();
+
+    try {
+      const address = await sseService.listen({ port: 0, host: "127.0.0.1" });
+      const abortController = new AbortController();
+      const response = await fetch(`${address}/connections/sse?recipientId=recipient-sse`, {
+        headers: { accept: "text/event-stream" },
+        signal: abortController.signal,
+      });
+
+      abortController.abort();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type")?.startsWith("text/event-stream"), true);
+      assert.equal(response.headers.get("cache-control"), "no-cache");
+    } finally {
+      await sseService.close();
+    }
+  });
+});
+
 describe("T3 Inbox REST", () => {
   function notificationFixture(overrides: Partial<Notification> = {}): Notification {
     return {
