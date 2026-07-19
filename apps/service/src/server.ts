@@ -18,6 +18,10 @@ type LiveConnection = {
   send(data: string): void;
 };
 
+type RecipientConnection = {
+  send(notification: Notification): void;
+};
+
 type Pipeline = {
   publish(event: Event): Promise<number>;
   close(): Promise<void>;
@@ -89,15 +93,15 @@ function notificationFromMessage(message: KafkaNotificationMessage): Notificatio
 }
 
 class LiveConnections {
-  readonly #connectionsByRecipient = new Map<string, Set<LiveConnection>>();
+  readonly #connectionsByRecipient = new Map<string, Set<RecipientConnection>>();
 
-  add(recipientId: string, connection: LiveConnection) {
-    const connections = this.#connectionsByRecipient.get(recipientId) ?? new Set<LiveConnection>();
+  add(recipientId: string, connection: RecipientConnection) {
+    const connections = this.#connectionsByRecipient.get(recipientId) ?? new Set<RecipientConnection>();
     connections.add(connection);
     this.#connectionsByRecipient.set(recipientId, connections);
   }
 
-  remove(recipientId: string, connection: LiveConnection) {
+  remove(recipientId: string, connection: RecipientConnection) {
     const connections = this.#connectionsByRecipient.get(recipientId);
     connections?.delete(connection);
 
@@ -108,12 +112,41 @@ class LiveConnections {
 
   push(notification: Notification) {
     const connections = this.#connectionsByRecipient.get(notification.recipientId) ?? [];
-    const serialized = JSON.stringify(notification);
 
     for (const connection of connections) {
-      if (connection.readyState === openConnectionState) {
-        connection.send(serialized);
-      }
+      connection.send(notification);
+    }
+  }
+}
+
+class WebSocketRecipientConnection implements RecipientConnection {
+  readonly #connection: LiveConnection;
+
+  constructor(connection: LiveConnection) {
+    this.#connection = connection;
+  }
+
+  send(notification: Notification) {
+    if (this.#connection.readyState === openConnectionState) {
+      this.#connection.send(JSON.stringify(notification));
+    }
+  }
+}
+
+class SseRecipientConnection implements RecipientConnection {
+  readonly #stream: {
+    destroyed: boolean;
+    writableEnded: boolean;
+    write(data: string): void;
+  };
+
+  constructor(stream: { destroyed: boolean; writableEnded: boolean; write(data: string): void }) {
+    this.#stream = stream;
+  }
+
+  send(notification: Notification) {
+    if (!this.#stream.destroyed && !this.#stream.writableEnded) {
+      this.#stream.write(`event: notification\ndata: ${JSON.stringify(notification)}\n\n`);
     }
   }
 }
@@ -424,9 +457,35 @@ export function buildService(options: ServiceOptions = {}) {
         return;
       }
 
-      liveConnections.add(recipientId, connection);
+      const recipientConnection = new WebSocketRecipientConnection(connection);
+      liveConnections.add(recipientId, recipientConnection);
       connection.on("message", () => {});
-      connection.on("close", () => liveConnections.remove(recipientId, connection));
+      connection.on("close", () => liveConnections.remove(recipientId, recipientConnection));
+    });
+  });
+
+  app.get("/connections/sse", (request, reply) => {
+    const recipientId = (request.query as { recipientId?: string }).recipientId;
+
+    if (!recipientId) {
+      return reply.code(400).send({
+        error: "recipient_id_required",
+      });
+    }
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "cache-control": "no-cache",
+      "connection": "keep-alive",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+    });
+    reply.raw.write(": connected\n\n");
+
+    const recipientConnection = new SseRecipientConnection(reply.raw);
+    liveConnections.add(recipientId, recipientConnection);
+    request.raw.on("close", () => {
+      liveConnections.remove(recipientId, recipientConnection);
     });
   });
 
