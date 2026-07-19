@@ -16,13 +16,35 @@ describe("service hello world", () => {
     assert.deepEqual(response.json(), { status: "ok" });
   });
 
-  it("does not expose an Event ingest surface in the T1 scaffold", async () => {
+  it("rejects malformed Events with validation details", async () => {
     const response = await service.inject({
       method: "POST",
-      url: "/events/validate-placeholder",
-      payload: { id: "evt_1", type: "demo.event" },
+      url: "/events",
+      payload: { id: "evt_1", type: "demo.event", recipients: [] },
     });
 
-    assert.equal(response.statusCode, 404);
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.json().error, "invalid_event");
+    assert.match(JSON.stringify(response.json().details), /recipients/);
+  });
+
+  it("rejects Events addressed to the same Recipient more than once", async () => {
+    const response = await service.inject({
+      method: "POST",
+      url: "/events",
+      payload: {
+        id: "evt_duplicate_recipient",
+        type: "demo.event",
+        recipients: ["recipient-a", "recipient-a"],
+        title: "Duplicate recipient",
+        body: "This Event addresses one Recipient twice.",
+        payload: { example: true },
+        occurredAt: "2026-07-19T10:00:00.000Z",
+      },
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.json().error, "invalid_event");
+    assert.match(JSON.stringify(response.json().details), /unique/);
   });
 });
