@@ -46,6 +46,33 @@ export const notificationSchema = z.object({
   createdAt: z.string().datetime(),
 });
 
+export const inboxPageSchema = z.object({
+  notifications: z.array(notificationSchema),
+  page: z.object({
+    limit: z.number().int().positive(),
+    offset: z.number().int().min(0),
+    nextOffset: z.number().int().min(0).nullable(),
+  }),
+});
+
+export const unreadCountSchema = z.object({
+  recipientId: z.string().min(1),
+  unread: z.number().int().min(0),
+});
+
+export const markReadResponseSchema = z.object({
+  notification: notificationSchema,
+});
+
+export const markAllReadResponseSchema = z.object({
+  recipientId: z.string().min(1),
+  markedRead: z.number().int().min(0),
+});
+
 export type Event = z.infer<typeof eventSchema>;
 export type KafkaNotificationMessage = z.infer<typeof kafkaNotificationMessageSchema>;
 export type Notification = z.infer<typeof notificationSchema>;
+export type InboxPageResponse = z.infer<typeof inboxPageSchema>;
+export type UnreadCountResponse = z.infer<typeof unreadCountSchema>;
+export type MarkReadResponse = z.infer<typeof markReadResponseSchema>;
+export type MarkAllReadResponse = z.infer<typeof markAllReadResponseSchema>;
