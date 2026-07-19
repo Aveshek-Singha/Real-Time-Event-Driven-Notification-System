@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildService } from "../../apps/service/src/server.ts";
+import { startAuthHarness } from "./auth-harness.mjs";
 import WebSocket from "ws";
 
-async function openWebSocket(url) {
-  const socket = new WebSocket(url);
+async function openWebSocket(url, headers) {
+  const socket = new WebSocket(url, { headers });
 
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("WebSocket did not open")), 10_000);
@@ -43,10 +44,13 @@ async function noWebSocketJson(socket) {
   });
 }
 
-async function openSse(url) {
+async function openSse(url, headers) {
   const abortController = new AbortController();
   const response = await fetch(url, {
-    headers: { accept: "text/event-stream" },
+    headers: {
+      accept: "text/event-stream",
+      ...headers,
+    },
     signal: abortController.signal,
   });
 
@@ -98,10 +102,13 @@ async function nextSseJson(connection) {
   throw new Error("SSE message timed out");
 }
 
-async function postEvent(port, event) {
+async function postEvent(port, event, auth) {
   const response = await fetch(`http://127.0.0.1:${port}/events`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...await auth.producerHeaders(),
+    },
     body: JSON.stringify(event),
   });
   const responseBody = await response.json();
@@ -141,6 +148,7 @@ const port = Number(process.env.PORT);
 assert.ok(port > 0, "PORT is required");
 assert.ok(process.env.POSTGRES_URL, "POSTGRES_URL is required");
 
+const auth = await startAuthHarness();
 const service = buildService();
 const sockets = [];
 const sseConnections = [];
@@ -148,9 +156,18 @@ const sseConnections = [];
 try {
   await service.listen({ port, host: "127.0.0.1" });
 
-  const firstWebSocket = await openWebSocket(`ws://127.0.0.1:${port}/connections/ws?recipientId=recipient-mixed`);
-  const secondWebSocket = await openWebSocket(`ws://127.0.0.1:${port}/connections/ws?recipientId=recipient-mixed`);
-  const sse = await openSse(`http://127.0.0.1:${port}/connections/sse?recipientId=recipient-mixed`);
+  const firstWebSocket = await openWebSocket(
+    `ws://127.0.0.1:${port}/connections/ws`,
+    await auth.recipientHeaders("recipient-mixed"),
+  );
+  const secondWebSocket = await openWebSocket(
+    `ws://127.0.0.1:${port}/connections/ws`,
+    await auth.recipientHeaders("recipient-mixed"),
+  );
+  const sse = await openSse(
+    `http://127.0.0.1:${port}/connections/sse`,
+    await auth.recipientHeaders("recipient-mixed"),
+  );
   sockets.push(firstWebSocket, secondWebSocket);
   sseConnections.push(sse);
   await delay(100);
@@ -165,7 +182,7 @@ try {
     nextSseJson(sse),
   ];
 
-  await postEvent(port, mixedEvent);
+  await postEvent(port, mixedEvent, auth);
 
   const [firstWsNotification, secondWsNotification, sseNotification] = await Promise.all(messages);
   assertNotification(firstWsNotification, mixedEvent, "recipient-mixed");
@@ -184,15 +201,21 @@ try {
     nextSseJson(sse),
   ];
 
-  await postEvent(port, afterDisconnectEvent);
+  await postEvent(port, afterDisconnectEvent, auth);
 
   const [survivingWsNotification, survivingSseNotification] = await Promise.all(survivingMessages);
   assertNotification(survivingWsNotification, afterDisconnectEvent, "recipient-mixed");
   assert.deepEqual(survivingSseNotification, survivingWsNotification);
   await noWebSocketJson(firstWebSocket);
 
-  const orderedWebSocket = await openWebSocket(`ws://127.0.0.1:${port}/connections/ws?recipientId=recipient-order`);
-  const orderedSse = await openSse(`http://127.0.0.1:${port}/connections/sse?recipientId=recipient-order`);
+  const orderedWebSocket = await openWebSocket(
+    `ws://127.0.0.1:${port}/connections/ws`,
+    await auth.recipientHeaders("recipient-order"),
+  );
+  const orderedSse = await openSse(
+    `http://127.0.0.1:${port}/connections/sse`,
+    await auth.recipientHeaders("recipient-order"),
+  );
   sockets.push(orderedWebSocket);
   sseConnections.push(orderedSse);
   await delay(100);
@@ -214,7 +237,7 @@ try {
     nextSseJson(orderedSse),
   ];
 
-  await postEvent(port, firstOrderedEvent);
+  await postEvent(port, firstOrderedEvent, auth);
 
   const [firstOrderedWsNotification, firstOrderedSseNotification] = await Promise.all(firstOrderedMessages);
   assertNotification(firstOrderedWsNotification, firstOrderedEvent, "recipient-order");
@@ -225,7 +248,7 @@ try {
     nextSseJson(orderedSse),
   ];
 
-  await postEvent(port, secondOrderedEvent);
+  await postEvent(port, secondOrderedEvent, auth);
 
   const [secondOrderedWsNotification, secondOrderedSseNotification] = await Promise.all(secondOrderedMessages);
   assertNotification(secondOrderedWsNotification, secondOrderedEvent, "recipient-order");
@@ -238,4 +261,5 @@ try {
     connection.abortController.abort();
   }
   await service.close();
+  await auth.stop();
 }

@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildService } from "../../apps/service/src/server.ts";
+import { startAuthHarness } from "./auth-harness.mjs";
 import pg from "pg";
 import WebSocket from "ws";
 
 const { Client } = pg;
 
-async function openWebSocket(url) {
-  const socket = new WebSocket(url);
+async function openWebSocket(url, headers) {
+  const socket = new WebSocket(url, { headers });
 
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("WebSocket did not open")), 10_000);
@@ -46,10 +47,13 @@ async function noJsonMessage(socket) {
   });
 }
 
-async function postEvent(port, event) {
+async function postEvent(port, event, auth) {
   const response = await fetch(`http://127.0.0.1:${port}/events`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...await auth.producerHeaders(),
+    },
     body: JSON.stringify(event),
   });
   const responseBody = await response.json();
@@ -86,6 +90,7 @@ const port = Number(process.env.PORT);
 assert.ok(port > 0, "PORT is required");
 assert.ok(process.env.POSTGRES_URL, "POSTGRES_URL is required");
 
+const auth = await startAuthHarness();
 const service = buildService();
 const sockets = [];
 let postgres;
@@ -95,9 +100,18 @@ try {
   postgres = new Client({ connectionString: process.env.POSTGRES_URL });
   await postgres.connect();
 
-  const firstRecipientConnection = await openWebSocket(`ws://127.0.0.1:${port}/connections/ws?recipientId=recipient-a`);
-  const secondRecipientConnection = await openWebSocket(`ws://127.0.0.1:${port}/connections/ws?recipientId=recipient-a`);
-  const otherRecipientConnection = await openWebSocket(`ws://127.0.0.1:${port}/connections/ws?recipientId=recipient-b`);
+  const firstRecipientConnection = await openWebSocket(
+    `ws://127.0.0.1:${port}/connections/ws`,
+    await auth.recipientHeaders("recipient-a"),
+  );
+  const secondRecipientConnection = await openWebSocket(
+    `ws://127.0.0.1:${port}/connections/ws`,
+    await auth.recipientHeaders("recipient-a"),
+  );
+  const otherRecipientConnection = await openWebSocket(
+    `ws://127.0.0.1:${port}/connections/ws`,
+    await auth.recipientHeaders("recipient-b"),
+  );
   sockets.push(firstRecipientConnection, secondRecipientConnection, otherRecipientConnection);
   await delay(100);
 
@@ -111,7 +125,7 @@ try {
     nextJsonMessage(otherRecipientConnection),
   ];
 
-  await postEvent(port, fanOutEvent);
+  await postEvent(port, fanOutEvent, auth);
 
   const [firstRecipientNotification, secondRecipientNotification, otherRecipientNotification] =
     await Promise.all(fanOutMessages);
@@ -136,7 +150,10 @@ try {
     title: fanOutEvent.title,
   }]);
 
-  const retryConnection = await openWebSocket(`ws://127.0.0.1:${port}/connections/ws?recipientId=recipient-retry`);
+  const retryConnection = await openWebSocket(
+    `ws://127.0.0.1:${port}/connections/ws`,
+    await auth.recipientHeaders("recipient-retry"),
+  );
   sockets.push(retryConnection);
   await delay(100);
 
@@ -146,9 +163,9 @@ try {
   });
   const firstRetryMessage = nextJsonMessage(retryConnection);
 
-  await postEvent(port, retryEvent);
+  await postEvent(port, retryEvent, auth);
   assertNotification(await firstRetryMessage, retryEvent, "recipient-retry");
-  await postEvent(port, retryEvent);
+  await postEvent(port, retryEvent, auth);
   await noJsonMessage(retryConnection);
 
   const retryRows = await postgres.query(
@@ -157,7 +174,10 @@ try {
   );
   assert.deepEqual(retryRows.rows, [{ count: 1 }]);
 
-  const orderedConnection = await openWebSocket(`ws://127.0.0.1:${port}/connections/ws?recipientId=recipient-order`);
+  const orderedConnection = await openWebSocket(
+    `ws://127.0.0.1:${port}/connections/ws`,
+    await auth.recipientHeaders("recipient-order"),
+  );
   sockets.push(orderedConnection);
   await delay(100);
 
@@ -173,11 +193,11 @@ try {
   });
   const firstOrderedMessage = nextJsonMessage(orderedConnection);
 
-  await postEvent(port, firstOrderedEvent);
+  await postEvent(port, firstOrderedEvent, auth);
   assertNotification(await firstOrderedMessage, firstOrderedEvent, "recipient-order");
 
   const secondOrderedMessage = nextJsonMessage(orderedConnection);
-  await postEvent(port, secondOrderedEvent);
+  await postEvent(port, secondOrderedEvent, auth);
   assertNotification(await secondOrderedMessage, secondOrderedEvent, "recipient-order");
 } finally {
   for (const socket of sockets) {
@@ -185,4 +205,5 @@ try {
   }
   await postgres?.end();
   await service.close();
+  await auth.stop();
 }

@@ -16,6 +16,7 @@
     "@fastify/websocket": "^11.3.0",
     "@notification-system/contracts": "workspace:*",
     "fastify": "^5.0.0",
+    "jose": "^6.2.3",
     "kafkajs": "^2.2.4",
     "pg": "^8.22.0"
   },

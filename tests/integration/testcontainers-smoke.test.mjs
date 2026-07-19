@@ -7,12 +7,26 @@ import pg from "pg";
 
 const { Client } = pg;
 
+async function startKafkaContainer() {
+  let lastError;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await new KafkaContainer("confluentinc/cp-kafka:7.4.0")
+        .withKraft()
+        .withStartupTimeout(300_000)
+        .start();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError;
+}
+
 describe("T1 Testcontainers smoke harness", () => {
   it("starts Kafka and Postgres and connects to both", { timeout: 420_000 }, async () => {
-    const kafkaContainer = await new KafkaContainer("confluentinc/cp-kafka:7.4.0")
-      .withKraft()
-      .withStartupTimeout(300_000)
-      .start();
+    const kafkaContainer = await startKafkaContainer();
     const postgresContainer = await new PostgreSqlContainer("postgres:16-alpine").start();
 
     try {

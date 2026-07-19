@@ -77,11 +77,25 @@ async function probeTcpPort(port) {
   });
 }
 
+async function startKafkaContainer() {
+  let lastError;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await new KafkaContainer("confluentinc/cp-kafka:7.4.0")
+        .withKraft()
+        .withStartupTimeout(300_000)
+        .start();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError;
+}
+
 async function testcontainersInfrastructure() {
-  const kafkaContainer = await new KafkaContainer("confluentinc/cp-kafka:7.4.0")
-    .withKraft()
-    .withStartupTimeout(300_000)
-    .start();
+  const kafkaContainer = await startKafkaContainer();
   const postgresContainer = await new PostgreSqlContainer("postgres:16-alpine").start();
 
   return {
@@ -107,7 +121,7 @@ async function waitForRunner(runner, output) {
         timeout = setTimeout(() => {
           runner.kill();
           reject(new Error(`T4 runner timed out\n${output.join("")}`));
-        }, 120_000);
+        }, 420_000);
         timeout.unref();
       }),
     ]);
