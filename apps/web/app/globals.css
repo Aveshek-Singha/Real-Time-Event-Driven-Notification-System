@@ -134,6 +134,11 @@ button:disabled {
   margin-top: 18px;
 }
 
+.header-link,
+.ops-home-link {
+  margin-top: 0;
+}
+
 .topbar,
 .control-row,
 .notification {
@@ -285,13 +290,51 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.ops-shell {
+  min-height: auto;
+}
+
+.ops-link-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.ops-link {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  color: inherit;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 18px;
+  text-decoration: none;
+}
+
+.ops-link:hover {
+  border-color: #156f83;
+}
+
+.ops-link strong,
+.ops-link span span {
+  display: block;
+}
+
+.ops-link span span {
+  color: #667085;
+  margin-top: 6px;
+}
+
 @media (max-width: 680px) {
   .shell {
     padding: 20px;
   }
 
   .topbar,
-  .notification {
+  .notification,
+  .ops-link {
     align-items: stretch;
     flex-direction: column;
   }

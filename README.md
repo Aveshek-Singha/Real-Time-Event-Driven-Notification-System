@@ -34,6 +34,14 @@ pnpm test:integration
 
 The integration test requires a running Docker daemon.
 
+Run the full-stack T8 happy path against Docker Compose with Playwright:
+
+```sh
+pnpm test:e2e
+```
+
+This installs the Playwright Chromium browser if needed, starts the compose infrastructure, launches the service on `http://localhost:3001`, launches the web app on `http://localhost:3002`, signs in as the demo Recipient, publishes an Event, verifies live Delivery, marks the Notification read, and verifies the unread badge clears.
+
 Run only the retry/DLQ/metrics integration slice:
 
 ```sh
@@ -68,6 +76,7 @@ Local service endpoints:
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000`, admin `admin` / `admin`
 - Kafka-UI: `http://localhost:8081`
+- Ops page: `http://localhost:3002/ops`
 
 Prometheus scrapes the locally running service at `host.docker.internal:3001/metrics`.
 Start the service on port `3001` when you want Grafana to show live service data.
@@ -111,7 +120,7 @@ Get a demo Recipient token for Inbox REST, WS, or SSE:
 curl -s http://localhost:8080/realms/notifications/protocol/openid-connect/token \
   -d grant_type=password \
   -d client_id=notification-web \
-  -d username=demo-recipient \
+  -d username=recipient-demo \
   -d password=password
 ```
 
@@ -132,11 +141,14 @@ NEXT_PUBLIC_NOTIFICATION_API_BASE_URL=http://localhost:3001
 NEXT_PUBLIC_KEYCLOAK_AUTHORIZATION_URL=http://localhost:8080/realms/notifications/protocol/openid-connect/auth
 NEXT_PUBLIC_KEYCLOAK_TOKEN_URL=http://localhost:8080/realms/notifications/protocol/openid-connect/token
 NEXT_PUBLIC_KEYCLOAK_CLIENT_ID=notification-web
+NEXT_PUBLIC_GRAFANA_DASHBOARD_URL=http://localhost:3000/d/notification-system/notification-system
+NEXT_PUBLIC_KAFKA_UI_URL=http://localhost:8081
 pnpm --dir apps/web exec next dev --port 3002
 ```
 
 Open `http://localhost:3002` and sign in as `recipient-demo` / `password`.
 The app loads that Recipient's Inbox, opens a live Connection, shows a toast for new Notifications, and lets the Recipient mark one or all Notifications read.
+Open `http://localhost:3002/ops` for operator links to Grafana and Kafka-UI. Override `NEXT_PUBLIC_GRAFANA_DASHBOARD_URL` and `NEXT_PUBLIC_KAFKA_UI_URL` when those tools are exposed somewhere other than the local compose defaults.
 
 Publish a demo Event after signing in:
 
