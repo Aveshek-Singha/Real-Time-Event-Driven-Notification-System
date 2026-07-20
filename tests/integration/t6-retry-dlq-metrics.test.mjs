@@ -122,7 +122,7 @@ async function waitForRunner(runner, output) {
       new Promise((_, reject) => {
         timeout = setTimeout(() => {
           runner.kill();
-          reject(new Error(`T2 runner timed out\n${output.join("")}`));
+          reject(new Error(`T6 runner timed out\n${output.join("")}`));
         }, 600_000);
         timeout.unref();
       }),
@@ -132,23 +132,27 @@ async function waitForRunner(runner, output) {
   }
 }
 
-describe("T2 Event in to Notification out over WebSocket", () => {
-  it("accepts an Event, persists a Notification, and pushes it live", { timeout: 600_000 }, async () => {
+describe("T6 retry, DLQ, and metrics", () => {
+  it("parks failed messages and advances to the next Notification on the same partition", { timeout: 600_000 }, async () => {
     const infrastructure = await startInfrastructure();
     const port = await findOpenPort();
+    const topicSuffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const output = [];
     const runner = spawn(process.execPath, [
       "--conditions=development",
       "--import",
       "tsx",
-      "tests/integration/t2-tracer-bullet-runner.mjs",
+      "tests/integration/t6-retry-dlq-metrics-runner.mjs",
     ], {
       cwd: process.cwd(),
       env: {
         ...process.env,
         KAFKA_BROKERS: infrastructure.kafkaBroker,
-        KAFKA_GROUP_ID: `t2-${Date.now()}`,
-        KAFKA_TOPIC: `notifications-t2-${Date.now()}`,
+        KAFKA_DLQ_TOPIC: `notifications-t6-dlq-${topicSuffix}`,
+        KAFKA_GROUP_ID: `t6-${topicSuffix}`,
+        KAFKA_RETRY_ATTEMPTS: "5",
+        KAFKA_RETRY_BACKOFF_MS: "100",
+        KAFKA_TOPIC: `notifications-t6-${topicSuffix}`,
         PORT: String(port),
         POSTGRES_URL: infrastructure.postgresUrl,
       },

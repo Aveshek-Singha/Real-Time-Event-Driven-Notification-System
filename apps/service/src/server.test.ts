@@ -95,6 +95,105 @@ describe("service hello world", () => {
   });
 });
 
+describe("T6 Prometheus metrics", () => {
+  function buildPipeline() {
+    return {
+      async publish(event: Event) {
+        return event.recipients.length;
+      },
+      async close() {},
+    };
+  }
+
+  function eventFixture(overrides: Partial<Event> = {}): Event {
+    return {
+      id: "evt_metrics",
+      type: "order.shipped",
+      recipients: ["recipient-a"],
+      title: "Order shipped",
+      body: "Your order is on the way.",
+      payload: { orderId: "order-1" },
+      occurredAt: "2026-07-19T10:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function metricValue(body: string, name: string) {
+    const match = new RegExp(`^${name} (\\d+(?:\\.\\d+)?)$`, "m").exec(body);
+
+    assert.ok(match, `expected ${name} in metrics body`);
+
+    return Number(match[1]);
+  }
+
+  it("exports the promised metric families at the HTTP edge", async () => {
+    const metricsService = buildService({ authenticator: buildTestAuthenticator() });
+
+    try {
+      const response = await metricsService.inject({ method: "GET", url: "/metrics" });
+      const body = response.body;
+
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.headers["content-type"]?.toString().startsWith("text/plain"), true);
+      assert.match(body, /^# HELP notification_ingest_events_total /m);
+      assert.match(body, /^# TYPE notification_ingest_events_total counter$/m);
+      assert.match(body, /^# HELP notification_delivery_notifications_total /m);
+      assert.match(body, /^# TYPE notification_delivery_notifications_total counter$/m);
+      assert.match(body, /^# HELP notification_consumer_lag_messages /m);
+      assert.match(body, /^# TYPE notification_consumer_lag_messages gauge$/m);
+      assert.match(body, /^# HELP notification_dlq_depth_messages /m);
+      assert.match(body, /^# TYPE notification_dlq_depth_messages gauge$/m);
+      assert.match(body, /^# HELP notification_live_connections /m);
+      assert.match(body, /^# TYPE notification_live_connections gauge$/m);
+    } finally {
+      await metricsService.close();
+    }
+  });
+
+  it("updates ingest and live Connection metrics from public service activity", async () => {
+    const metricsService = buildService({
+      authenticator: buildTestAuthenticator(),
+      pipeline: buildPipeline(),
+    });
+
+    try {
+      const address = await metricsService.listen({ port: 0, host: "127.0.0.1" });
+      const socket = new WebSocket(address.replace("http://", "ws://") + "/connections/ws", {
+        headers: recipientAuthHeaders("recipient-a"),
+      });
+
+      await once(socket, "open");
+      await delay(50);
+
+      const connectedMetrics = await fetch(`${address}/metrics`);
+      assert.equal(metricValue(await connectedMetrics.text(), "notification_live_connections"), 1);
+
+      const eventResponse = await fetch(`${address}/events`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...producerAuthHeaders,
+        },
+        body: JSON.stringify(eventFixture()),
+      });
+
+      assert.equal(eventResponse.status, 202, await eventResponse.text());
+
+      const afterEventMetrics = await fetch(`${address}/metrics`);
+      assert.equal(metricValue(await afterEventMetrics.text(), "notification_ingest_events_total"), 1);
+
+      socket.close();
+      await once(socket, "close");
+      await delay(50);
+
+      const disconnectedMetrics = await fetch(`${address}/metrics`);
+      assert.equal(metricValue(await disconnectedMetrics.text(), "notification_live_connections"), 0);
+    } finally {
+      await metricsService.close();
+    }
+  });
+});
+
 describe("T5 producer auth", () => {
   function eventFixture(overrides: Partial<Event> = {}): Event {
     return {

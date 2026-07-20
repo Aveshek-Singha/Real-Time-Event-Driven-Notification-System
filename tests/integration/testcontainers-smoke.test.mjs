@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { KafkaContainer } from "@testcontainers/kafka";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { Wait } from "testcontainers";
 import { Kafka, logLevel } from "kafkajs";
 import pg from "pg";
 
@@ -14,6 +15,7 @@ async function startKafkaContainer() {
     try {
       return await new KafkaContainer("confluentinc/cp-kafka:7.4.0")
         .withKraft()
+        .withWaitStrategy(Wait.forListeningPorts().withStartupTimeout(300_000))
         .withStartupTimeout(300_000)
         .start();
     } catch (error) {
@@ -25,7 +27,7 @@ async function startKafkaContainer() {
 }
 
 describe("T1 Testcontainers smoke harness", () => {
-  it("starts Kafka and Postgres and connects to both", { timeout: 420_000 }, async () => {
+  it("starts Kafka and Postgres and connects to both", { timeout: 600_000 }, async () => {
     const kafkaContainer = await startKafkaContainer();
     const postgresContainer = await new PostgreSqlContainer("postgres:16-alpine").start();
 

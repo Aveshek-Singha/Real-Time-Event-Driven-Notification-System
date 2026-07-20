@@ -34,6 +34,12 @@ pnpm test:integration
 
 The integration test requires a running Docker daemon.
 
+Run only the retry/DLQ/metrics integration slice:
+
+```sh
+node --conditions=development --import tsx --test --test-concurrency=1 tests/integration/t6-retry-dlq-metrics.test.mjs
+```
+
 ## Compose Stack
 
 Start all infrastructure services and wait for healthchecks:
@@ -63,6 +69,9 @@ Local service endpoints:
 - Grafana: `http://localhost:3000`, admin `admin` / `admin`
 - Kafka-UI: `http://localhost:8081`
 
+Prometheus scrapes the locally running service at `host.docker.internal:3001/metrics`.
+Start the service on port `3001` when you want Grafana to show live service data.
+
 Protected service surfaces require OIDC access tokens. Configure the service to validate compose Keycloak tokens:
 
 ```sh
@@ -72,6 +81,19 @@ OIDC_PRODUCER_CLIENT_ID=notification-producer
 OIDC_RECIPIENT_CLIENT_ID=notification-web
 OIDC_RECIPIENT_ID_CLAIM=recipient_id
 ```
+
+Configure the service pipeline against the compose infrastructure:
+
+```sh
+KAFKA_BROKERS=localhost:9094
+KAFKA_TOPIC=notifications
+KAFKA_DLQ_TOPIC=notifications.dlq
+KAFKA_RETRY_ATTEMPTS=3
+KAFKA_RETRY_BACKOFF_MS=250
+POSTGRES_URL=postgresql://notifications:notifications@localhost:5432/notifications
+```
+
+Parked Events are written to the DLQ topic with the original Kafka payload, failure reason, failure kind, and attempt count. Inspect them in Kafka-UI under the configured `KAFKA_DLQ_TOPIC`.
 
 Get a Producer token for `POST /events`:
 
@@ -99,6 +121,8 @@ Run the service locally:
 ```sh
 pnpm --filter @notification-system/service dev
 ```
+
+The service exposes Prometheus metrics at `http://localhost:3001/metrics` by default.
 
 Run the web app locally:
 
