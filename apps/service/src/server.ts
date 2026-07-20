@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import {
   eventSchema,
@@ -8,6 +9,7 @@ import {
   type Event,
   type KafkaNotificationMessage,
   type Notification,
+  type ParkedEvent,
 } from "@notification-system/contracts";
 import { Kafka, logLevel, type Consumer, type Producer } from "kafkajs";
 import pg from "pg";
@@ -86,9 +88,62 @@ type JwksAuthenticatorOptions = {
 
 type KafkaPipelineOptions = {
   brokers: string[];
+  dlqTopic: string;
   groupId: string;
+  retryAttempts: number;
+  retryBackoffMs: number;
   topic: string;
 };
+
+type MetricFamily = {
+  help: string;
+  name: string;
+  type: "counter" | "gauge";
+};
+
+const metricFamilies: MetricFamily[] = [{
+  name: "notification_ingest_events_total",
+  help: "Events accepted by the ingest API.",
+  type: "counter",
+}, {
+  name: "notification_delivery_notifications_total",
+  help: "Notifications delivered to live Connections.",
+  type: "counter",
+}, {
+  name: "notification_consumer_lag_messages",
+  help: "Kafka consumer lag in messages.",
+  type: "gauge",
+}, {
+  name: "notification_dlq_depth_messages",
+  help: "Parked Events currently visible on the dead-letter topic.",
+  type: "gauge",
+}, {
+  name: "notification_live_connections",
+  help: "Live recipient Connections currently registered with the service.",
+  type: "gauge",
+}];
+
+class PrometheusMetrics {
+  readonly #values = new Map(metricFamilies.map((family) => [family.name, 0]));
+
+  increment(name: string, amount = 1) {
+    this.#values.set(name, (this.#values.get(name) ?? 0) + amount);
+  }
+
+  set(name: string, value: number) {
+    this.#values.set(name, value);
+  }
+
+  render() {
+    return metricFamilies
+      .map((family) => [
+        `# HELP ${family.name} ${family.help}`,
+        `# TYPE ${family.name} ${family.type}`,
+        `${family.name} ${this.#values.get(family.name) ?? 0}`,
+      ].join("\n"))
+      .join("\n") + "\n";
+  }
+}
 
 const openConnectionState = 1;
 
@@ -125,28 +180,50 @@ function notificationFromMessage(message: KafkaNotificationMessage): Notificatio
 
 class LiveConnections {
   readonly #connectionsByRecipient = new Map<string, Set<RecipientConnection>>();
+  readonly #metrics: PrometheusMetrics;
+  #connectionCount = 0;
+
+  constructor(metrics: PrometheusMetrics) {
+    this.#metrics = metrics;
+  }
 
   add(recipientId: string, connection: RecipientConnection) {
     const connections = this.#connectionsByRecipient.get(recipientId) ?? new Set<RecipientConnection>();
+    const existingConnection = connections.has(connection);
+
     connections.add(connection);
     this.#connectionsByRecipient.set(recipientId, connections);
+
+    if (!existingConnection) {
+      this.#connectionCount += 1;
+      this.#metrics.set("notification_live_connections", this.#connectionCount);
+    }
   }
 
   remove(recipientId: string, connection: RecipientConnection) {
     const connections = this.#connectionsByRecipient.get(recipientId);
-    connections?.delete(connection);
+    const removed = connections?.delete(connection);
 
     if (connections?.size === 0) {
       this.#connectionsByRecipient.delete(recipientId);
+    }
+
+    if (removed) {
+      this.#connectionCount -= 1;
+      this.#metrics.set("notification_live_connections", this.#connectionCount);
     }
   }
 
   push(notification: Notification) {
     const connections = this.#connectionsByRecipient.get(notification.recipientId) ?? [];
+    let deliveries = 0;
 
     for (const connection of connections) {
       connection.send(notification);
+      deliveries += 1;
     }
+
+    return deliveries;
   }
 }
 
@@ -269,13 +346,23 @@ class RejectingAuthenticator implements Authenticator {
 
 class KafkaNotificationPipeline implements Pipeline {
   readonly #consumer: Consumer;
+  #dlqDepth = 0;
+  readonly #dlqTopic: string;
   readonly #kafka: Kafka;
   readonly #liveConnections: LiveConnections;
+  readonly #metrics: PrometheusMetrics;
   readonly #producer: Producer;
+  readonly #retryAttempts: number;
+  readonly #retryBackoffMs: number;
   readonly #store: InboxStore;
   readonly #topic: string;
 
-  constructor(options: KafkaPipelineOptions, liveConnections: LiveConnections, store: InboxStore) {
+  constructor(
+    options: KafkaPipelineOptions,
+    liveConnections: LiveConnections,
+    store: InboxStore,
+    metrics: PrometheusMetrics,
+  ) {
     this.#kafka = new Kafka({
       brokers: options.brokers,
       clientId: "notification-service",
@@ -283,15 +370,19 @@ class KafkaNotificationPipeline implements Pipeline {
     });
 
     this.#consumer = this.#kafka.consumer({ groupId: options.groupId });
+    this.#dlqTopic = options.dlqTopic;
     this.#liveConnections = liveConnections;
+    this.#metrics = metrics;
     this.#producer = this.#kafka.producer();
+    this.#retryAttempts = options.retryAttempts;
+    this.#retryBackoffMs = options.retryBackoffMs;
     this.#store = store;
     this.#topic = options.topic;
   }
 
   async start() {
     await this.#store.migrate();
-    await this.#ensureTopic();
+    await this.#ensureTopics();
     await this.#producer.connect();
     await this.#consumer.connect();
     await this.#consumer.subscribe({ topic: this.#topic, fromBeginning: true });
@@ -304,25 +395,17 @@ class KafkaNotificationPipeline implements Pipeline {
     this.#consumer.on(this.#consumer.events.CRASH, (event) => {
       console.error("notification consumer crashed", event.payload.error);
     });
+    this.#consumer.on(this.#consumer.events.START_BATCH_PROCESS, (event) => {
+      const lag = Number(event.payload.offsetLag);
+
+      if (Number.isFinite(lag)) {
+        this.#metrics.set("notification_consumer_lag_messages", Math.max(0, lag));
+      }
+    });
 
     await this.#consumer.run({
       eachMessage: async ({ message }) => {
-        try {
-          if (!message.value) {
-            throw new Error("Kafka notification message value is required");
-          }
-
-          const parsedMessage = kafkaNotificationMessageSchema.parse(JSON.parse(message.value.toString()));
-          const notification = notificationFromMessage(parsedMessage);
-          const inserted = await this.#store.persist(notification);
-
-          if (inserted) {
-            this.#liveConnections.push(notification);
-          }
-        } catch (error) {
-          console.error("notification message handling failed", error);
-          throw error;
-        }
+        await this.#handleMessage(message);
       },
     });
     await groupJoined;
@@ -353,24 +436,109 @@ class KafkaNotificationPipeline implements Pipeline {
     ]);
   }
 
-  async #ensureTopic() {
+  async #ensureTopics() {
     const admin = this.#kafka.admin();
 
     await admin.connect();
     try {
       await admin.createTopics({
         waitForLeaders: true,
-        topics: [{
-          topic: this.#topic,
+        topics: [this.#topic, this.#dlqTopic].map((topic) => ({
+          topic,
           numPartitions: 3,
           replicationFactor: 1,
-        }],
+        })),
       });
     } finally {
       await admin.disconnect();
     }
   }
 
+  async #handleMessage(message: { key?: Buffer | null; value?: Buffer | null }) {
+    const originalKey = message.key?.toString() ?? null;
+    const originalValue = message.value?.toString() ?? null;
+    let parsedMessage: KafkaNotificationMessage;
+
+    try {
+      if (!message.value) {
+        throw new Error("Kafka notification message value is required");
+      }
+
+      parsedMessage = kafkaNotificationMessageSchema.parse(JSON.parse(message.value.toString()));
+    } catch (error) {
+      await this.#parkMessage({
+        attempts: 0,
+        failureKind: "malformed",
+        failureReason: failureReason(error),
+        originalKey,
+        originalValue,
+      });
+      return;
+    }
+
+    const maxAttempts = this.#retryAttempts + 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const notification = notificationFromMessage(parsedMessage);
+        const inserted = await this.#store.persist(notification);
+
+        if (inserted) {
+          const deliveries = this.#liveConnections.push(notification);
+
+          if (deliveries > 0) {
+            this.#metrics.increment("notification_delivery_notifications_total", deliveries);
+          }
+        }
+
+        this.#metrics.set("notification_consumer_lag_messages", 0);
+        return;
+      } catch (error) {
+        if (attempt === maxAttempts) {
+          await this.#parkMessage({
+            attempts: attempt,
+            failureKind: "processing_failed",
+            failureReason: failureReason(error),
+            originalKey,
+            originalValue,
+          });
+          return;
+        }
+
+        await delay(this.#retryBackoffMs);
+      }
+    }
+  }
+
+  async #parkMessage(options: {
+    attempts: number;
+    failureKind: ParkedEvent["failureKind"];
+    failureReason: string;
+    originalKey: string | null;
+    originalValue: string | null;
+  }) {
+    const parkedEvent: ParkedEvent = {
+      attempts: options.attempts,
+      failureKind: options.failureKind,
+      failureReason: options.failureReason,
+      originalKey: options.originalKey,
+      originalValue: options.originalValue,
+      parkedAt: new Date().toISOString(),
+      sourceTopic: this.#topic,
+    };
+
+    await this.#producer.send({
+      topic: this.#dlqTopic,
+      messages: [{
+        key: options.originalKey ?? undefined,
+        value: JSON.stringify(parkedEvent),
+      }],
+    });
+
+    this.#dlqDepth += 1;
+    this.#metrics.set("notification_consumer_lag_messages", 0);
+    this.#metrics.set("notification_dlq_depth_messages", this.#dlqDepth);
+  }
 }
 
 class PgInboxStore implements InboxStore {
@@ -538,6 +706,30 @@ function parseIntegerQuery(value: unknown, fallback: number, options: { min: num
   return parsed;
 }
 
+function parseEnvironmentInteger(name: string, fallback: number, options: { min: number; max: number }) {
+  const value = process.env[name];
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed < options.min || parsed > options.max) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function failureReason(error: unknown) {
+  if (error instanceof Error) {
+    return error.message || error.name;
+  }
+
+  return String(error);
+}
+
 function extractAuthorizationBearerToken(request: { headers: { authorization?: string } }) {
   const authorization = request.headers.authorization;
 
@@ -589,7 +781,7 @@ function environmentAuthenticator() {
   });
 }
 
-function environmentDependencies(liveConnections: LiveConnections) {
+function environmentDependencies(liveConnections: LiveConnections, metrics: PrometheusMetrics) {
   const brokers = process.env.KAFKA_BROKERS?.split(",").map((broker) => broker.trim()).filter(Boolean);
   const postgresUrl = process.env.POSTGRES_URL;
 
@@ -598,19 +790,24 @@ function environmentDependencies(liveConnections: LiveConnections) {
   }
 
   const inboxStore = new PgInboxStore(postgresUrl);
+  const topic = process.env.KAFKA_TOPIC ?? "notifications";
   const pipeline = new KafkaNotificationPipeline({
     brokers,
+    dlqTopic: process.env.KAFKA_DLQ_TOPIC ?? `${topic}.dlq`,
     groupId: process.env.KAFKA_GROUP_ID ?? `notification-service-${randomUUID()}`,
-    topic: process.env.KAFKA_TOPIC ?? "notifications",
-  }, liveConnections, inboxStore);
+    retryAttempts: parseEnvironmentInteger("KAFKA_RETRY_ATTEMPTS", 3, { min: 0, max: 20 }),
+    retryBackoffMs: parseEnvironmentInteger("KAFKA_RETRY_BACKOFF_MS", 250, { min: 0, max: 60_000 }),
+    topic,
+  }, liveConnections, inboxStore, metrics);
 
   return { inboxStore, pipeline };
 }
 
 export function buildService(options: ServiceOptions = {}) {
   const app = Fastify({ logger: true, pluginTimeout: 120_000 });
-  const liveConnections = new LiveConnections();
-  const environment = options.pipeline || options.inboxStore ? undefined : environmentDependencies(liveConnections);
+  const metrics = new PrometheusMetrics();
+  const liveConnections = new LiveConnections(metrics);
+  const environment = options.pipeline || options.inboxStore ? undefined : environmentDependencies(liveConnections, metrics);
   const authenticator = options.authenticator ?? environmentAuthenticator() ?? new RejectingAuthenticator();
   const pipeline = options.pipeline ?? environment?.pipeline;
   const inboxStore = options.inboxStore ?? environment?.inboxStore;
@@ -726,6 +923,12 @@ export function buildService(options: ServiceOptions = {}) {
     status: "ok",
   }));
 
+  app.get("/metrics", async (_request, reply) => {
+    return reply
+      .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
+      .send(metrics.render());
+  });
+
   app.post("/events", async (request, reply) => {
     if (!await requireProducer(request, reply)) {
       return;
@@ -747,6 +950,7 @@ export function buildService(options: ServiceOptions = {}) {
     }
 
     const notificationCount = await pipeline.publish(parsedEvent.data);
+    metrics.increment("notification_ingest_events_total");
 
     return reply.code(202).send({
       accepted: true,

@@ -7,6 +7,7 @@ import {
   markAllReadResponseSchema,
   markReadResponseSchema,
   notificationSchema,
+  parkedEventSchema,
   unreadCountSchema,
 } from "./index.js";
 
@@ -67,6 +68,23 @@ describe("T2 notification contracts", () => {
     };
 
     assert.deepEqual(notificationSchema.parse(notification), notification);
+  });
+
+  it("pins the Parked Event shape for DLQ diagnostics", () => {
+    const parkedEvent = {
+      parkedAt: "2026-07-19T10:01:00.000Z",
+      sourceTopic: "notifications",
+      originalKey: "recipient-a",
+      originalValue: JSON.stringify({
+        eventId: event.id,
+        recipientId: "recipient-a",
+      }),
+      failureKind: "processing_failed",
+      failureReason: "insert failed",
+      attempts: 3,
+    };
+
+    assert.deepEqual(parkedEventSchema.parse(parkedEvent), parkedEvent);
   });
 });
 

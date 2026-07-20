@@ -56,6 +56,8 @@ services:
     image: prom/prometheus:v2.54.1
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "9090:9090"
     volumes:

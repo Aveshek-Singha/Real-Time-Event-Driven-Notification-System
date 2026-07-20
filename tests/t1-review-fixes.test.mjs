@@ -24,10 +24,12 @@ describe("T1 review fixes", () => {
     assert.doesNotMatch(page, /sampleEvent|demo\.notification|Event/);
   });
 
-  it("does not configure Prometheus to scrape a service metrics endpoint before metrics exist", () => {
+  it("configures Prometheus to scrape the service metrics endpoint once metrics exist", () => {
     const prometheus = read("infra/prometheus/prometheus.yml");
 
-    assert.doesNotMatch(prometheus, /notification-service|host\.docker\.internal:3001|\/metrics/);
+    assert.match(prometheus, /job_name:\s+"notification-service"/);
+    assert.match(prometheus, /host\.docker\.internal:3001/);
+    assert.match(prometheus, /metrics_path:\s+"\/metrics"/);
   });
 
   it("ignores generated TypeScript build state", () => {

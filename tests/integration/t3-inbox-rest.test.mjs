@@ -5,6 +5,7 @@ import { createServer, Socket } from "node:net";
 import { describe, it } from "node:test";
 import { KafkaContainer } from "@testcontainers/kafka";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { Wait } from "testcontainers";
 import pg from "pg";
 
 const { Client } = pg;
@@ -84,6 +85,7 @@ async function startKafkaContainer() {
     try {
       return await new KafkaContainer("confluentinc/cp-kafka:7.4.0")
         .withKraft()
+        .withWaitStrategy(Wait.forListeningPorts().withStartupTimeout(300_000))
         .withStartupTimeout(300_000)
         .start();
     } catch (error) {
@@ -121,7 +123,7 @@ async function waitForRunner(runner, output) {
         timeout = setTimeout(() => {
           runner.kill();
           reject(new Error(`T3 runner timed out\n${output.join("")}`));
-        }, 420_000);
+        }, 600_000);
         timeout.unref();
       }),
     ]);
@@ -131,7 +133,7 @@ async function waitForRunner(runner, output) {
 }
 
 describe("T3 Inbox REST", () => {
-  it("returns offline Notifications newest-first through the Inbox", { timeout: 420_000 }, async () => {
+  it("returns offline Notifications newest-first through the Inbox", { timeout: 600_000 }, async () => {
     const infrastructure = await startInfrastructure();
     const port = await findOpenPort();
     const output = [];

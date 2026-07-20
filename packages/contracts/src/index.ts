@@ -34,6 +34,16 @@ export const kafkaNotificationMessageSchema = z.object({
   occurredAt: z.string().datetime(),
 });
 
+export const parkedEventSchema = z.object({
+  parkedAt: z.string().datetime(),
+  sourceTopic: z.string().min(1),
+  originalKey: z.string().nullable(),
+  originalValue: z.string().nullable(),
+  failureKind: z.enum(["malformed", "processing_failed"]),
+  failureReason: z.string().min(1),
+  attempts: z.number().int().min(0),
+});
+
 export const notificationSchema = z.object({
   id: z.string().min(1),
   eventId: z.string().min(1),
@@ -71,6 +81,7 @@ export const markAllReadResponseSchema = z.object({
 
 export type Event = z.infer<typeof eventSchema>;
 export type KafkaNotificationMessage = z.infer<typeof kafkaNotificationMessageSchema>;
+export type ParkedEvent = z.infer<typeof parkedEventSchema>;
 export type Notification = z.infer<typeof notificationSchema>;
 export type InboxPageResponse = z.infer<typeof inboxPageSchema>;
 export type UnreadCountResponse = z.infer<typeof unreadCountSchema>;
