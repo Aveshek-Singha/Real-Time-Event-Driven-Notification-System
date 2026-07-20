@@ -9,6 +9,8 @@ const ignoredDirectories = new Set([
   "coverage",
   "dist",
   "node_modules",
+  "playwright-report",
+  "test-results",
 ]);
 const checkedExtensions = new Set([
   ".cjs",

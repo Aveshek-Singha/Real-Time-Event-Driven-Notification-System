@@ -330,6 +330,7 @@ function NotificationCenter({
           <h1>Notification Center</h1>
         </div>
         <div className="header-actions">
+          <a className="secondary-link header-link" href="/ops">Ops</a>
           <span className="unread-badge" aria-label={`${state.unread} unread Notifications`}>
             {state.unread}
           </span>

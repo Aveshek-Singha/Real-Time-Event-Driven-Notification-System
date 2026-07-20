@@ -9,10 +9,12 @@
     "typecheck": "pnpm -r typecheck",
     "test": "node --test tests/*.test.mjs && pnpm -r test",
     "test:integration": "node --conditions=development --import tsx --test --test-concurrency=1 tests/integration/*.test.mjs",
+    "test:e2e": "playwright install chromium && docker compose up -d --wait && playwright test",
     "compose:up": "docker compose up -d --wait",
     "compose:down": "docker compose down -v"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@testcontainers/kafka": "^11.5.0",
     "@testcontainers/postgresql": "^11.5.0",
     "@types/node": "^24.0.0",
