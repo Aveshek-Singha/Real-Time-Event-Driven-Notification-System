@@ -5,7 +5,7 @@ A pnpm monorepo for a standalone notification service. Producer systems will pub
 ## Workspace
 
 - `apps/service`: Fastify service scaffold with health endpoints.
-- `apps/web`: Next.js notification center scaffold.
+- `apps/web`: Next.js notification center for Recipient sign-in, live Delivery, unread count, and read-state controls.
 - `packages/contracts`: shared zod contracts package.
 - `infra`: local Docker Compose provisioning for Kafka, Postgres, Keycloak, Prometheus, Grafana, and Kafka-UI.
 
@@ -63,7 +63,7 @@ Local service endpoints:
 - Service audience: `notification-service`
 - Producer client: `notification-producer` / `producer-secret`
 - Web client: `notification-web`
-- Demo recipient: `demo-recipient` / `password`
+- Demo Recipient: `recipient-demo` / `password`
 - Demo operator: `demo-operator` / `password`
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3000`, admin `admin` / `admin`
@@ -80,6 +80,7 @@ OIDC_AUDIENCE=notification-service
 OIDC_PRODUCER_CLIENT_ID=notification-producer
 OIDC_RECIPIENT_CLIENT_ID=notification-web
 OIDC_RECIPIENT_ID_CLAIM=recipient_id
+WEB_ORIGINS=http://localhost:3002
 ```
 
 Configure the service pipeline against the compose infrastructure:
@@ -127,5 +128,36 @@ The service exposes Prometheus metrics at `http://localhost:3001/metrics` by def
 Run the web app locally:
 
 ```sh
-pnpm --filter @notification-system/web dev -- --port 3002
+NEXT_PUBLIC_NOTIFICATION_API_BASE_URL=http://localhost:3001
+NEXT_PUBLIC_KEYCLOAK_AUTHORIZATION_URL=http://localhost:8080/realms/notifications/protocol/openid-connect/auth
+NEXT_PUBLIC_KEYCLOAK_TOKEN_URL=http://localhost:8080/realms/notifications/protocol/openid-connect/token
+NEXT_PUBLIC_KEYCLOAK_CLIENT_ID=notification-web
+pnpm --dir apps/web exec next dev --port 3002
 ```
+
+Open `http://localhost:3002` and sign in as `recipient-demo` / `password`.
+The app loads that Recipient's Inbox, opens a live Connection, shows a toast for new Notifications, and lets the Recipient mark one or all Notifications read.
+
+Publish a demo Event after signing in:
+
+```sh
+PRODUCER_TOKEN=$(curl -s http://localhost:8080/realms/notifications/protocol/openid-connect/token \
+  -d grant_type=client_credentials \
+  -d client_id=notification-producer \
+  -d client_secret=producer-secret | node -e "let body='';process.stdin.on('data',c=>body+=c);process.stdin.on('end',()=>console.log(JSON.parse(body).access_token))")
+
+curl -i http://localhost:3001/events \
+  -H "authorization: Bearer $PRODUCER_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{
+    "id": "evt_demo_order_shipped",
+    "type": "order.shipped",
+    "recipients": ["recipient-demo"],
+    "title": "Order shipped",
+    "body": "Your demo order is on the way.",
+    "payload": { "orderId": "demo-order-1" },
+    "occurredAt": "2026-07-20T10:00:00.000Z"
+  }'
+```
+
+Use the `AUTO`, `WS`, and `SSE` transport control in the app to verify both live transports.

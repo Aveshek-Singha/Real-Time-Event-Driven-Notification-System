@@ -39,6 +39,7 @@
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": true,
+      "implicitFlowEnabled": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "redirectUris": ["http://localhost:3002/*"],
@@ -76,9 +77,11 @@
     {
       "username": "recipient-demo",
       "enabled": true,
+      "email": "recipient-demo@example.com",
       "emailVerified": true,
       "firstName": "Demo",
       "lastName": "Recipient",
+      "requiredActions": [],
       "credentials": [
         {
           "type": "password",

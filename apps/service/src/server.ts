@@ -803,6 +803,15 @@ function environmentDependencies(liveConnections: LiveConnections, metrics: Prom
   return { inboxStore, pipeline };
 }
 
+function allowedWebOrigins() {
+  return new Set(
+    (process.env.WEB_ORIGINS ?? "http://localhost:3002")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  );
+}
+
 export function buildService(options: ServiceOptions = {}) {
   const app = Fastify({ logger: true, pluginTimeout: 120_000 });
   const metrics = new PrometheusMetrics();
@@ -811,6 +820,7 @@ export function buildService(options: ServiceOptions = {}) {
   const authenticator = options.authenticator ?? environmentAuthenticator() ?? new RejectingAuthenticator();
   const pipeline = options.pipeline ?? environment?.pipeline;
   const inboxStore = options.inboxStore ?? environment?.inboxStore;
+  const corsOrigins = allowedWebOrigins();
 
   async function requireProducer(request: { headers: { authorization?: string } }, reply: { code(statusCode: number): { send(payload: unknown): unknown } }) {
     const result = await authenticator.authenticateProducer(request);
@@ -859,6 +869,19 @@ export function buildService(options: ServiceOptions = {}) {
   }
 
   app.register(websocket);
+  app.addHook("onRequest", (request, reply, done) => {
+    const origin = request.headers.origin;
+
+    if (origin && corsOrigins.has(origin)) {
+      reply.header("access-control-allow-origin", origin);
+      reply.header("access-control-allow-headers", "authorization, content-type, accept");
+      reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
+      reply.header("vary", "origin");
+    }
+
+    done();
+  });
+  app.options("/*", async (_request, reply) => reply.code(204).send());
   app.after(() => {
     app.get("/connections/ws", {
       websocket: true,

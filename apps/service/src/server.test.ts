@@ -797,6 +797,38 @@ describe("T5 fail-closed auth", () => {
   });
 });
 
+describe("T7 browser access", () => {
+  it("allows the web app origin to call authenticated REST surfaces", async () => {
+    const corsService = buildService({ authenticator: buildTestAuthenticator() });
+
+    try {
+      const preflight = await corsService.inject({
+        method: "OPTIONS",
+        url: "/recipients/recipient-a/inbox",
+        headers: {
+          origin: "http://localhost:3002",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "authorization",
+        },
+      });
+
+      assert.equal(preflight.statusCode, 204);
+      assert.equal(preflight.headers["access-control-allow-origin"], "http://localhost:3002");
+      assert.match(String(preflight.headers["access-control-allow-headers"]), /authorization/i);
+
+      const response = await corsService.inject({
+        method: "GET",
+        url: "/health",
+        headers: { origin: "http://localhost:3002" },
+      });
+
+      assert.equal(response.headers["access-control-allow-origin"], "http://localhost:3002");
+    } finally {
+      await corsService.close();
+    }
+  });
+});
+
 describe("T4 SSE transport", () => {
   it("opens an SSE Connection at the HTTP edge", async () => {
     const sseService = buildService({ authenticator: buildTestAuthenticator() });

@@ -1,0 +1,317 @@
+:root {
+  color: #17202a;
+  background: #f6f8fb;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.54;
+}
+
+.shell {
+  margin: 0 auto;
+  max-width: 1120px;
+  min-height: 100vh;
+  padding: 32px;
+}
+
+.auth-shell {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+}
+
+.auth-panel {
+  background: #ffffff;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  max-width: 420px;
+  padding: 28px;
+  width: 100%;
+}
+
+.auth-panel h1,
+.topbar h1 {
+  font-size: 32px;
+  line-height: 1.12;
+  margin: 0;
+}
+
+.eyebrow {
+  color: #667085;
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+.auth-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.auth-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.auth-form label span {
+  color: #475467;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.auth-form input {
+  border: 1px solid #b9c4d0;
+  border-radius: 6px;
+  padding: 11px 12px;
+  width: 100%;
+}
+
+.form-error {
+  background: #fff1f1;
+  border: 1px solid #ffb4a8;
+  border-radius: 6px;
+  color: #9b1c1c;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.primary-action,
+.secondary-action,
+.ghost-action,
+.segmented button,
+.toast button {
+  border-radius: 6px;
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.primary-action {
+  background: #156f83;
+  border: 1px solid #156f83;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.secondary-action,
+.segmented button {
+  background: #ffffff;
+  border: 1px solid #b9c4d0;
+  color: #17202a;
+}
+
+.ghost-action,
+.toast button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #475467;
+}
+
+.secondary-link {
+  color: #156f83;
+  display: inline-block;
+  font-weight: 700;
+  margin-top: 18px;
+}
+
+.topbar,
+.control-row,
+.notification {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.topbar {
+  border-bottom: 1px solid #d9e1ea;
+  padding-bottom: 22px;
+}
+
+.header-actions,
+.control-row {
+  flex-wrap: wrap;
+}
+
+.header-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.unread-badge {
+  align-items: center;
+  background: #b8325f;
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  font-weight: 800;
+  height: 34px;
+  justify-content: center;
+  min-width: 34px;
+  padding: 0 10px;
+}
+
+.control-row {
+  margin: 24px 0;
+}
+
+.segmented {
+  background: #e8edf2;
+  border: 1px solid #cbd5df;
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+}
+
+.segmented button {
+  border-color: transparent;
+  min-width: 58px;
+}
+
+.segmented button[aria-pressed="true"] {
+  background: #17202a;
+  color: #ffffff;
+}
+
+.status-pill {
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 8px 12px;
+  text-transform: uppercase;
+}
+
+.status-live {
+  background: #dff6e7;
+  color: #17663a;
+}
+
+.status-loading,
+.status-reconnecting {
+  background: #fff4d6;
+  color: #7a4d00;
+}
+
+.status-offline {
+  background: #ffe4e0;
+  color: #9b1c1c;
+}
+
+.toast {
+  align-items: center;
+  background: #17202a;
+  border-radius: 8px;
+  bottom: 24px;
+  color: #ffffff;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 14px 16px;
+  position: fixed;
+  right: 24px;
+  z-index: 10;
+}
+
+.toast button {
+  color: #ffffff;
+}
+
+.notification-list {
+  display: grid;
+  gap: 12px;
+}
+
+.empty-state,
+.notification {
+  background: #ffffff;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  margin: 0;
+  padding: 18px;
+}
+
+.notification.unread {
+  border-left: 5px solid #156f83;
+}
+
+.notification.read {
+  color: #667085;
+}
+
+.notification h2 {
+  font-size: 19px;
+  line-height: 1.24;
+  margin: 2px 0 6px;
+}
+
+.notification p {
+  margin: 0;
+}
+
+.notification time,
+.notification-type {
+  color: #667085;
+  display: block;
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+.notification-type {
+  font-weight: 800;
+  margin-top: 0;
+  text-transform: uppercase;
+}
+
+@media (max-width: 680px) {
+  .shell {
+    padding: 20px;
+  }
+
+  .topbar,
+  .notification {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .header-actions,
+  .control-row {
+    align-items: stretch;
+  }
+
+  .segmented {
+    width: 100%;
+  }
+
+  .segmented button {
+    flex: 1;
+  }
+
+  .toast {
+    bottom: 16px;
+    left: 16px;
+    right: 16px;
+  }
+}

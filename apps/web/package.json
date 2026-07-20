@@ -9,7 +9,7 @@
     "lint": "node ../../scripts/lint.mjs app package.json tsconfig.json next.config.mjs",
     "start": "next start",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node -e \"console.log('web smoke test placeholder')\""
+    "test": "node --import tsx --test app/*.test.ts"
   },
   "dependencies": {
     "@notification-system/contracts": "workspace:*",
